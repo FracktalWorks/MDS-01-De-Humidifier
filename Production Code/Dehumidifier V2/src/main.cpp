@@ -55,7 +55,7 @@ MUIU8G2 mui;
   const char *message[] = {"IDLE", "DRYING", "ABORTED", "DONE"};                      /*Message to show*/
   const char *mode_info[] = {"Dries for a specified amount of time.", "Continuously dries throughout the",  "printing process."};
   
-  uint8_t temp[] = {50, 60, 70, 80, 70, 80, 100, 100};
+  uint8_t temp[] = {60, 50, 70, 80, 70, 80, 100, 100};
   uint8_t hour[] = {2, 4, 6, 10, 10, 10, 24, 24};
   uint8_t minute[] = {0, 0, 0, 0, 0, 0,0,0};
   
@@ -200,7 +200,7 @@ uint8_t home_frame(mui_t *ui, uint8_t msg){
          else
          {
             u8g2.print("/");
-            u8g2.print(temp[filament_idx]+5);
+            u8g2.print(temp[filament_idx]);
          }
           u8g2.setCursor(94, 38);
           if (filament_idx == 0)
