@@ -1,39 +1,50 @@
+# Include Directory - MDS-01 Dehumidifier
 
-This directory is intended for project header files.
+This directory contains project header files.
 
-A header file is a file containing C declarations and macro definitions
-to be shared between several project source files. You request the use of a
-header file in your project source file (C, C++, etc) located in `src` folder
-by including it, with the C preprocessing directive `#include'.
+## Current Headers
 
-```src/main.c
+### pins.h
+Defines all GPIO pin assignments for the ESP32-S3. Edit this file if you need to change hardware connections.
 
-#include "header.h"
+**Pin Definitions:**
+| Define | GPIO | Function |
+|--------|------|----------|
+| NEOPIXEL_PIN | 14 | WS2812B RGB LED strip |
+| CLOCK | 36 | LCD SPI Clock |
+| DATA | 35 | LCD SPI Data (MOSI) |
+| CS | 21 | LCD Chip Select |
+| DC | 47 | LCD Data/Command |
+| RESET | 13 | LCD Reset |
+| DHT_PIN | 12 | DHT22 Sensor Data |
+| EN_A | 5 | Rotary Encoder A |
+| EN_B | 4 | Rotary Encoder B |
+| EN_BTN | 1 | Rotary Encoder Button |
+| BUZZER | 48 | Piezo Buzzer |
+| RELAY_1 | 15 | Fan Relay Control |
+| RELAY_2 | 16 | Heater Relay Control |
 
-int main (void)
-{
- ...
-}
+## Adding New Headers
+
+To add a new header file:
+1. Create your `.h` file in this directory
+2. Include it in your source files:
+
+```cpp
+#include "your_header.h"
 ```
 
-Including a header file produces the same results as copying the header file
-into each source file that needs it. Such copying would be time-consuming
-and error-prone. With a header file, the related declarations appear
-in only one place. If they need to be changed, they can be changed in one
-place, and programs that include the header file will automatically use the
-new version when next recompiled. The header file eliminates the labor of
-finding and changing all the copies as well as the risk that a failure to
-find one copy will result in inconsistencies within a program.
+## Standard Include Pattern
 
-In C, the usual convention is to give header files names that end with `.h'.
-It is most portable to use only letters, digits, dashes, and underscores in
-header file names, and at most one dot.
+```cpp
+// In src/main.cpp
+#include <Arduino.h>       // System headers use angle brackets
+#include <U8g2lib.h>       // Library headers use angle brackets
+#include "pins.h"          // Project headers use quotes
+#include "your_header.h"   // Your custom headers
+```
 
-Read more about using header files in official GCC documentation:
-
-* Include Syntax
-* Include Operation
-* Once-Only Headers
-* Computed Includes
-
-https://gcc.gnu.org/onlinedocs/cpp/Header-Files.html
+## Notes
+- Header guards are recommended to prevent multiple inclusion
+- Keep pin definitions in `pins.h` for easy hardware reconfiguration
+- Use `#define` for compile-time constants
