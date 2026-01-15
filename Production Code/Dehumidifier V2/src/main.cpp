@@ -1,7 +1,6 @@
 //....................HEADER FILES....................//
 
 #include <Arduino.h>
-#include <Arduino.h>
 #include <U8g2lib.h>
 #include <MUIU8g2.h>
 #include <SimpleRotary.h>
@@ -15,9 +14,11 @@
 
 
 //....................CONSTRUCTORS....................//  
-Adafruit_NeoPixel strip(3, NEOPIXEL_PIN, NEO_GRB);
+Adafruit_NeoPixel strip(3, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 SimpleRotary rotary(EN_A,EN_B,EN_BTN);
 DHT dht (DHT_PIN, DHT22);
+// Using Software SPI (custom pins GPIO36=CLK, GPIO35=DATA don't match HW SPI defaults)
+// Using page buffer mode (_1_) to minimize RAM usage and prevent corruption
 U8G2_ST7567_JLX12864_1_4W_SW_SPI u8g2(U8G2_R2, /* clock=*/ CLOCK, /* data=*/ DATA, /* cs=*/ CS, /* dc=*/ DC, /* reset=*/ RESET);
 MUIU8G2 mui;
 //....................CONSTRUCTORS....................//
@@ -25,10 +26,10 @@ MUIU8G2 mui;
 
 //....................GLOBAL VARIABLES....................//
   uint8_t gauge_radius = 16; /*Size of the gauge*/
-  uint8_t actual_temp = 0;  /*Temperature reading from DHT11 sensor*/
-  uint8_t humidity = 0;    /*Humidity reading from DHT11 sensor*/
-  uint8_t check = 0;         /*Checks the status of the De-humidifier*/
-  uint8_t start_check = 0;   /*for switching start or stop*/
+  volatile uint8_t actual_temp = 0;  /*Temperature reading from DHT22 sensor*/
+  volatile uint8_t humidity = 0;    /*Humidity reading from DHT22 sensor*/
+  volatile uint8_t check = 0;         /*Checks the status of the De-humidifier*/
+  volatile uint8_t start_check = 0;   /*for switching start or stop*/
   uint8_t light = 0;
   
   uint8_t minimum_temp_gauge_value = 0;
@@ -46,8 +47,8 @@ MUIU8G2 mui;
   uint8_t custom_hour = 0;
   uint8_t custom_minute = 0;
   
-  uint8_t actual_minute = 0;
-  uint8_t actual_hour = 0;
+  volatile uint8_t actual_minute = 0;
+  volatile uint8_t actual_hour = 0;
 
   const char *filaments[] = { "CUSTOM","PLA", "ABS/ASA", "NYLON/PC", "PETG", "TPU", "PEEK", "ULTEM"};  /*List of all the Filaments*/
   const char *mode[] = {"PREHEAT", "CONTINUOUS"};                                     /*Drying Mode*/
@@ -67,12 +68,15 @@ MUIU8G2 mui;
   unsigned long new_hour = 0;
   unsigned long new_minute = 0;
   unsigned long time_interval = 0;
+  unsigned long last_dht_read = 0;
+  const unsigned long DHT_READ_INTERVAL = 2500; // DHT22 needs at least 2 seconds between reads
+  volatile uint8_t neopixel_needs_update = 1; // Flag to update NeoPixel outside draw callback
 
 
   // Rotary encoder variables
-  uint8_t is_redraw = 1;
-  uint8_t rotary_event = 0; // 0 = not turning, 1 = CW, 2 = CCW
-  uint8_t push_event = 0; // 0 = not pushed, 1 = pushed
+  volatile uint8_t is_redraw = 1;
+  volatile uint8_t rotary_event = 0; // 0 = not turning, 1 = CW, 2 = CCW
+  volatile uint8_t push_event = 0; // 0 = not pushed, 1 = pushed
   uint8_t debounce_time = 5; // ms
 
   //Buzzer Settings
@@ -256,43 +260,12 @@ uint8_t home_frame(mui_t *ui, uint8_t msg){
  uint8_t colour(mui_t *ui, uint8_t msg){
   
      if ( msg == MUIF_MSG_DRAW ) {
-         switch (check){
-            case 1:
-              strip.setPixelColor(0, strip.Color(0, 255, 0));
-              strip.show();
-              u8g2.setCursor(86,61);
-              u8g2.print(message[check]);
-              break;
-           case 2:
-              strip.setPixelColor(0, strip.Color(255, 0, 0));
-              strip.show();
-              u8g2.setCursor(86,61);
-              u8g2.print(message[check]);
-              break;
-           case 3:
-              strip.setPixelColor(0, strip.Color(0, 0, 255));
-              strip.show();
-              u8g2.setCursor(86,61);
-              u8g2.print(message[check]);
-              break;
-           default:
-              strip.setPixelColor(0, strip.Color(255, 255, 255));
-              strip.setPixelColor(1, strip.Color(5, 5, 5));
-             strip.setPixelColor(2, strip.Color(0, 0, 0));
-             strip.show();
-             u8g2.setCursor(86,61);
-             u8g2.print(message[check]);
-        }
+         // Only draw text here - NeoPixel updates handled separately
+         u8g2.setCursor(86,61);
+         u8g2.print(message[check]);
   }
   else if ( msg == MUIF_MSG_CURSOR_SELECT ) {
     mui.gotoForm(2,0);
-     // return mui_GotoFormAutoCursorPosition(ui, 2);
-  }
-  else{ 
-      strip.setPixelColor(0, strip.Color(255, 255, 255));
-      strip.setPixelColor(1, strip.Color(5, 5, 5));
-      strip.setPixelColor(2, strip.Color(0, 0, 0));
-      strip.show();
   }
   return 0;
 }
@@ -332,12 +305,14 @@ uint8_t home_frame(mui_t *ui, uint8_t msg){
         check = 1;
         start_check = 1;
         prev_time = millis();
+        neopixel_needs_update = 1; // Trigger LED update for DRYING state
       }
       else if (start_check == 1){
         check = 2;
         start_check = 0;
         actual_minute = 0;
         actual_hour = 0;
+        neopixel_needs_update = 1; // Trigger LED update for ABORTED state
       }
       
       return mui_GotoFormAutoCursorPosition(ui, ui->arg);
@@ -659,12 +634,43 @@ void setup(void) {
 
 // Read the temperature and humidity from the DHT sensor
 void read_from_dht(void){
-  if (!(isnan (actual_temp) || isnan (humidity))) {
-    actual_temp = dht.readTemperature();
-    humidity = dht.readHumidity();
-    is_redraw = 1;
+  unsigned long now = millis();
+  // Throttle DHT reads - DHT22 needs at least 2 seconds between reads
+  if ((now - last_dht_read) >= DHT_READ_INTERVAL) {
+    last_dht_read = now;
+    float temp_reading = dht.readTemperature();
+    float hum_reading = dht.readHumidity();
+    // Only update if readings are valid
+    if (!isnan(temp_reading) && !isnan(hum_reading)) {
+      actual_temp = (uint8_t)temp_reading;
+      humidity = (uint8_t)hum_reading;
+      is_redraw = 1;
+    }
   }
 }
+// Update NeoPixel LEDs - called outside of display draw callbacks
+void update_neopixel(void) {
+  if (!neopixel_needs_update) return;
+  neopixel_needs_update = 0;
+  
+  switch (check) {
+    case 1: // DRYING
+      strip.setPixelColor(0, strip.Color(0, 255, 0));
+      break;
+    case 2: // ABORTED
+      strip.setPixelColor(0, strip.Color(255, 0, 0));
+      break;
+    case 3: // DONE
+      strip.setPixelColor(0, strip.Color(0, 0, 255));
+      break;
+    default: // IDLE
+      strip.setPixelColor(0, strip.Color(255, 255, 255));
+      strip.setPixelColor(1, strip.Color(5, 5, 5));
+      strip.setPixelColor(2, strip.Color(0, 0, 0));
+  }
+  strip.show();
+}
+
 // Control the humidity Bang Bang controller
 void humidity_controller(void){
   if (start_check == 1){
@@ -683,10 +689,11 @@ void humidity_controller(void){
 // Control the temperature Bang Bang controller
 void temperature_controller(void){
   if (start_check == 1){
-    if (actual_temp < (temp[filament_idx]-2)){
+    int16_t target_temp = (int16_t)temp[filament_idx]; // Cast to signed to prevent underflow
+    if (actual_temp < (target_temp - 2)){
       digitalWrite(RELAY_2, HIGH);
     }
-    else if (actual_temp > (temp[filament_idx]+2)){
+    else if (actual_temp > (target_temp + 2)){
       digitalWrite(RELAY_2, LOW);
     }
   }
@@ -695,14 +702,15 @@ void temperature_controller(void){
   }
 }
 
-// Check the clock
+// Check the clock - handles millis() overflow correctly
 void check_continuous_clock(void){
   current_time = millis();
-  if (current_time - prev_time > 60000){
-    prev_time = millis();
-    if (actual_minute == 59){
+  // This subtraction handles overflow correctly due to unsigned arithmetic
+  if ((current_time - prev_time) >= 60000UL){
+    prev_time = current_time; // Use current_time instead of calling millis() again
+    if (actual_minute >= 59){
       actual_minute = 0;
-      actual_hour ++;
+      actual_hour++;
     }
     else {
       actual_minute++;
@@ -711,24 +719,28 @@ void check_continuous_clock(void){
   }
 }
 void check_preset_clock(void){
-current_time = millis();
-  if (current_time - prev_time > 60000){
-    prev_time = millis();
-    if (actual_minute == 59){
+  current_time = millis();
+  // This subtraction handles overflow correctly due to unsigned arithmetic
+  if ((current_time - prev_time) >= 60000UL){
+    prev_time = current_time; // Use current_time instead of calling millis() again
+    if (actual_minute >= 59){
       actual_minute = 0;
-      actual_hour ++;
+      actual_hour++;
     }
     else {
       actual_minute++;
     }
     is_redraw = 1;
   }
-  if (((actual_hour * 3600000UL) + (actual_minute* 60000UL)) > time_interval){
+  // Check if preset time has elapsed
+  unsigned long elapsed_ms = ((unsigned long)actual_hour * 3600000UL) + ((unsigned long)actual_minute * 60000UL);
+  if (elapsed_ms >= time_interval){
     start_check = 0;
     check = 3;
     actual_minute = 0;
     actual_hour = 0;
     is_redraw = 1;
+    neopixel_needs_update = 1;
   }
 }
 
@@ -739,31 +751,48 @@ void loop() {
   
   /* check whether the menu is active */
   if ( mui.isFormActive() ) {
+    // Poll encoder events first - do this frequently
+    detect_events();
+    
+    // Read DHT sensor (throttled internally)
     read_from_dht();
+    
+    // Control outputs
     humidity_controller();
     temperature_controller();
+    
+    // Update NeoPixel outside of draw callbacks to avoid timing conflicts
+    update_neopixel();
+    
+    // Handle timing based on mode
     if ((start_check == 1) && (mode_idx == 1)){
       check_continuous_clock();
     }
     else if ((start_check == 1) && (mode_idx == 0)){
-      new_minute = minute[filament_idx] * 60000UL;
-      new_hour = hour[filament_idx] * 3600000UL;
+      new_minute = (unsigned long)minute[filament_idx] * 60000UL;
+      new_hour = (unsigned long)hour[filament_idx] * 3600000UL;
       time_interval = new_minute + new_hour;
       check_preset_clock();
     }
+    
     /* update the display content, if the redraw flag is set */
     if ( is_redraw ) {
       u8g2.firstPage();
       do {
-          detect_events();
           mui.draw();
-          detect_events();
       } while( u8g2.nextPage() );
       is_redraw = 0;                    /* clear the redraw flag */
     }
-
+    
+    // Check encoder after display update completes
     detect_events();
+
+    // Handle any accumulated events
     handle_events();
+    
+    // Small delay to allow ESP32 background tasks (WiFi, watchdog, etc.)
+    // Prevents tight loop that can cause system instability
+    yield();
       
   } else {
       /* the menu should never become inactive, but if so, then restart the menu system */
